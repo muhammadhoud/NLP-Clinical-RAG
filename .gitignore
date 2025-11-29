@@ -77,7 +77,6 @@ pip-delete-this-directory.txt
 data/*.csv
 data/*.pkl
 data/*.json
-!data/.gitkeep
 !data/README.md
 
 # Model weights and caches
