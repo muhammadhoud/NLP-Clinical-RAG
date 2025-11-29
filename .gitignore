@@ -74,8 +74,6 @@ pip-delete-this-directory.txt
 .env.*.local
 
 # Data files (CRITICAL: Exclude large files)
-data/chroma_db/
-data/*.parquet
 data/*.csv
 data/*.pkl
 data/*.json
