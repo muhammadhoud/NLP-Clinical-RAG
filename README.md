@@ -394,7 +394,7 @@ sudo apt update
 sudo apt install -y python3-pip nvidia-cuda-toolkit
 
 # Clone and setup
-git clone https://github.com/yourusername/clinical-rag-assistant.git
+git clone https://github.com/muhammadhoud/NLP-Clinical-RAG.git
 cd clinical-rag-assistant
 pip install -r requirements.txt
 
@@ -438,40 +438,31 @@ Contributions are welcome! Please follow these guidelines:
 
 ### Contribution Ideas
 
-- [ ] Add more disease categories
-- [ ] Implement conversation history
-- [ ] Add export functionality (PDF/Word)
-- [ ] Create API endpoint (FastAPI)
-- [ ] Add user authentication
-- [ ] Implement feedback mechanism
-- [ ] Add multilingual support
-- [ ] Create mobile-responsive UI
+- Add more disease categories
+- Implement conversation history
+- Add export functionality (PDF/Word)
+- Create API endpoint (FastAPI)
+- Add user authentication
+- Implement feedback mechanism
+- Add multilingual support
+- Create mobile-responsive UI
 
 ---
 
-## 📄 License
-
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
-
-**Note**: The MIMIC-IV-EXT dataset requires credentialed access from PhysioNet and is subject to its own licensing terms.
-
----
 
 ## 🙏 Acknowledgments
 
-- **MIMIC-IV-EXT Dataset**: [PhysioNet](https://physionet.org/) and MIT Lab for Computational Physiology
 - **E5 Embeddings**: [Microsoft Research](https://huggingface.co/intfloat/e5-small-v2)
 - **Mistral-7B**: [Mistral AI](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2)
-- **ChromaDB**: [Chroma](https://www.trychroma.com/)
 - **Streamlit**: [Streamlit Inc.](https://streamlit.io/)
 
 ---
 
 ## 📞 Contact & Support
 
-- **GitHub Issues**: [Report bugs or request features](https://github.com/yourusername/clinical-rag-assistant/issues)
-- **Discussions**: [Ask questions or share ideas](https://github.com/yourusername/clinical-rag-assistant/discussions)
-- **Email**: your.email@example.com
+- **GitHub Issues**: [Report bugs or request features](https://github.com/muhammadhoud/NLP-Clinical-RAG)
+- **Discussions**: [Ask questions or share ideas](https://github.com/muhammadhoud/NLP-Clinical-RAG)
+- **Email**: 6240houd@gmail.com
 
 ---
 
@@ -482,28 +473,14 @@ If you use this project in your research, please cite:
 ```bibtex
 @software{clinical_rag_assistant_2025,
   title={Clinical RAG Assistant: Interactive Clinical Question Answering with E5 and Mistral-7B},
-  author={Your Name},
+  author={Muhammad Houd},
   year={2025},
-  url={https://github.com/yourusername/clinical-rag-assistant}
+  url={https://github.com/muhammadhoud/NLP-Clinical-RAG}
 }
 ```
 
 ---
 
-## 🔗 Related Projects
-
-- [LangChain Medical QA](https://github.com/langchain-ai/langchain)
-- [BioGPT](https://github.com/microsoft/BioGPT)
-- [ClinicalBERT](https://github.com/kexinhuang12345/clinicalBERT)
-- [Med-PaLM](https://arxiv.org/abs/2212.13138)
-
----
-
-## ⭐ Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=yourusername/clinical-rag-assistant&type=Date)](https://star-history.com/#yourusername/clinical-rag-assistant&Date)
-
----
 
 <p align="center">
   <strong>Made with ❤️ for clinical AI research</strong>
