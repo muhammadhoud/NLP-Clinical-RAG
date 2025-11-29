@@ -1,0 +1,4 @@
+# System-level packages (for Linux/Ubuntu environments)
+build-essential
+python3-dev
+git
