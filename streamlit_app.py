@@ -8,6 +8,8 @@ from datetime import datetime
 import json
 import pandas as pd
 import numpy as np
+import chromadb
+from chromadb.config import Settings
 
 # Add src directory to path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
@@ -37,29 +39,122 @@ def get_gpu_memory():
     return None
 
 # ============================================================================
-# CHROMADB PATH RESOLUTION
+# CHROMADB MANAGEMENT
 # ============================================================================
-def find_chromadb_path():
-    """Find the correct ChromaDB path, handling subdirectories"""
-    base_path = "data/chroma_db"
-    
-    if not os.path.exists(base_path):
-        return None, "ChromaDB directory not found"
-    
-    # Check if files are directly in chroma_db
-    direct_files = [f for f in os.listdir(base_path) if f.endswith('.bin')]
-    if direct_files:
-        return base_path, f"Found {len(direct_files)} ChromaDB files"
-    
-    # Check for subdirectories
-    subdirs = [d for d in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, d))]
-    for subdir in subdirs:
-        subdir_path = os.path.join(base_path, subdir)
-        subdir_files = [f for f in os.listdir(subdir_path) if f.endswith('.bin')]
-        if subdir_files:
-            return subdir_path, f"Found {len(subdir_files)} ChromaDB files in subdirectory {subdir}"
-    
-    return None, "No ChromaDB files found"
+def initialize_chromadb_collection():
+    """Initialize ChromaDB collection with sample clinical data"""
+    try:
+        chroma_path = "data/chroma_db"
+        
+        # Create directory if it doesn't exist
+        os.makedirs(chroma_path, exist_ok=True)
+        
+        # Initialize ChromaDB client
+        chroma_client = chromadb.PersistentClient(
+            path=chroma_path,
+            settings=Settings(anonymized_telemetry=False)
+        )
+        
+        # Check if collection exists
+        collections = chroma_client.list_collections()
+        collection_names = [col.name for col in collections]
+        
+        if "clinical_notes" in collection_names:
+            collection = chroma_client.get_collection("clinical_notes")
+            st.success(f"✅ Collection 'clinical_notes' loaded with {collection.count()} documents")
+            return collection
+        
+        # Create new collection
+        st.info("🔄 Creating new 'clinical_notes' collection...")
+        collection = chroma_client.create_collection(
+            name="clinical_notes",
+            metadata={"description": "Clinical notes for RAG system"}
+        )
+        
+        # Add sample clinical notes
+        sample_documents = [
+            "Patient presents with fever, cough, and shortness of breath. Chest X-ray shows consolidation in right lower lobe. Diagnosis: Community-acquired pneumonia.",
+            "Hypertension management: Patient's blood pressure is 145/92 mmHg. Current medications include lisinopril 10mg daily. Lifestyle modifications discussed.",
+            "Diabetes follow-up: HbA1c is 7.2%. Patient reports adherence to metformin 500mg twice daily. Foot examination shows no neuropathy signs.",
+            "Heart failure exacerbation: Patient presents with dyspnea on exertion and bilateral lower extremity edema. Echocardiogram shows reduced ejection fraction of 35%.",
+            "Stroke evaluation: CT head shows acute ischemic changes in left MCA territory. Patient has right-sided weakness and aphasia. NIH stroke scale: 12.",
+            "COPD management: Patient with chronic bronchitis presents with increased sputum production. Spirometry shows FEV1/FVC ratio of 0.58. On bronchodilator therapy.",
+            "Acute coronary syndrome: Patient with chest pain radiating to left arm. ECG shows ST-segment elevation in anterior leads. Troponin elevated at 2.4 ng/mL.",
+            "Asthma exacerbation: Patient presents with wheezing and respiratory distress. Peak flow 45% of personal best. Started on nebulized albuterol and corticosteroids.",
+            "Renal function: Patient with chronic kidney disease stage 3. Creatinine 1.8 mg/dL, eGFR 45 mL/min/1.73m². Monitoring for proteinuria.",
+            "Mental health: Patient reports depressive symptoms including anhedonia and sleep disturbance. PHQ-9 score: 15. Starting SSRI therapy."
+        ]
+        
+        sample_metadata = [
+            {"disease_category": "Pneumonia", "document_type": "clinical_note", "severity": "moderate"},
+            {"disease_category": "Hypertension", "document_type": "follow_up", "severity": "mild"},
+            {"disease_category": "Diabetes", "document_type": "follow_up", "severity": "moderate"},
+            {"disease_category": "Heart Failure", "document_type": "acute_care", "severity": "severe"},
+            {"disease_category": "Stroke", "document_type": "emergency", "severity": "severe"},
+            {"disease_category": "COPD", "document_type": "chronic_care", "severity": "moderate"},
+            {"disease_category": "Acute Coronary Syndrome", "document_type": "emergency", "severity": "severe"},
+            {"disease_category": "Asthma", "document_type": "acute_care", "severity": "moderate"},
+            {"disease_category": "Renal Disease", "document_type": "chronic_care", "severity": "moderate"},
+            {"disease_category": "Mental Health", "document_type": "evaluation", "severity": "moderate"}
+        ]
+        
+        # Add documents to collection
+        for i, (doc, meta) in enumerate(zip(sample_documents, sample_metadata)):
+            collection.add(
+                documents=[doc],
+                metadatas=[meta],
+                ids=[f"clinical_note_{i+1}"]
+            )
+        
+        st.success(f"✅ Created 'clinical_notes' collection with {len(sample_documents)} sample documents")
+        return collection
+        
+    except Exception as e:
+        st.error(f"❌ Failed to initialize ChromaDB: {e}")
+        return None
+
+def get_chromadb_collection():
+    """Get or create ChromaDB collection"""
+    try:
+        chroma_path = "data/chroma_db"
+        
+        # Check if ChromaDB directory exists
+        if not os.path.exists(chroma_path):
+            st.warning("📁 ChromaDB directory not found. Creating new database...")
+            return initialize_chromadb_collection()
+        
+        # Initialize client
+        chroma_client = chromadb.PersistentClient(
+            path=chroma_path,
+            settings=Settings(anonymized_telemetry=False)
+        )
+        
+        # List collections
+        collections = chroma_client.list_collections()
+        
+        if not collections:
+            st.warning("📊 No collections found. Creating new collection...")
+            return initialize_chromadb_collection()
+        
+        # Try to get clinical_notes collection
+        try:
+            collection = chroma_client.get_collection("clinical_notes")
+            st.success(f"✅ Loaded 'clinical_notes' collection with {collection.count()} documents")
+            return collection
+        except Exception as e:
+            st.warning(f"⚠️ Collection 'clinical_notes' not found: {e}")
+            st.info("Available collections:")
+            for col in collections:
+                st.write(f"- {col.name} ({col.count()} documents)")
+            
+            # Offer to create collection
+            if st.button("🔄 Create Clinical Notes Collection"):
+                return initialize_chromadb_collection()
+            return None
+            
+    except Exception as e:
+        st.error(f"❌ ChromaDB error: {e}")
+        return None
 
 # ============================================================================
 # PAGE CONFIGURATION
@@ -136,6 +231,14 @@ st.markdown("""
         padding: 0.75rem 2rem;
         font-weight: 600;
     }
+    
+    .warning-box {
+        background: rgba(255, 193, 7, 0.1);
+        border: 1px solid #ffc107;
+        border-radius: 10px;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -148,24 +251,25 @@ def load_rag_pipeline():
     import torch
     from sentence_transformers import SentenceTransformer
     from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
-    import chromadb
-    from chromadb.config import Settings
     
     # Import from src directory
-    from src.rag_pipeline import RAGPipelineMistral
+    try:
+        from src.rag_pipeline import RAGPipelineMistral
+    except ImportError:
+        st.error("❌ Could not import RAGPipelineMistral from src directory")
+        return None, None
     
     # Clear memory before loading
     cleanup_memory()
     
-    # Find ChromaDB path
-    chroma_path, chroma_message = find_chromadb_path()
-    if chroma_path is None:
-        st.error(f"❌ {chroma_message}")
+    # Get ChromaDB collection
+    collection = get_chromadb_collection()
+    if collection is None:
         return None, None
     
     # Configuration
     config = {
-        'chroma_db_path': chroma_path,
+        'chroma_db_path': "data/chroma_db",
         'collection_name': "clinical_notes",
         'model_name': "intfloat/e5-small-v2",
         'generation_model_name': "mistralai/Mistral-7B-Instruct-v0.2"
@@ -173,34 +277,11 @@ def load_rag_pipeline():
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     st.info(f"🖥️ Using device: {device}")
-    st.info(f"📁 {chroma_message}")
 
     try:
         # Load embedding model
         st.info("📥 Loading embedding model...")
         embedding_model = SentenceTransformer(config['model_name'], device=device)
-        
-        # Load ChromaDB
-        st.info("📚 Loading ChromaDB...")
-        chroma_client = chromadb.PersistentClient(
-            path=config['chroma_db_path'],
-            settings=Settings(anonymized_telemetry=False)
-        )
-        
-        # List available collections
-        collections = chroma_client.list_collections()
-        st.info(f"📊 Found {len(collections)} collections")
-        
-        # Try to get the clinical_notes collection
-        try:
-            collection = chroma_client.get_collection(name=config['collection_name'])
-            st.success(f"✅ Loaded collection: {config['collection_name']}")
-        except Exception as e:
-            st.error(f"❌ Could not load collection '{config['collection_name']}': {e}")
-            st.info("Available collections:")
-            for col in collections:
-                st.write(f"- {col.name} ({col.count()} documents)")
-            return None, None
         
         # Load tokenizer
         st.info("🔤 Loading tokenizer...")
@@ -225,7 +306,8 @@ def load_rag_pipeline():
             quantization_config=bnb_config,
             device_map="auto",
             low_cpu_mem_usage=True,
-            torch_dtype=torch.bfloat16
+            torch_dtype=torch.bfloat16,
+            trust_remote_code=True
         )
         
         # Create pipeline
@@ -249,6 +331,7 @@ def load_rag_pipeline():
             'do_sample': True,
         })
         
+        st.success("✅ RAG pipeline initialized successfully!")
         return pipeline, config
         
     except Exception as e:
@@ -276,18 +359,26 @@ if not st.session_state.initialized:
             
             pipeline, config = load_rag_pipeline()
             if pipeline is None:
-                st.error("❌ Failed to initialize pipeline. Please check the data directory.")
+                st.error("❌ Failed to initialize pipeline.")
+                st.markdown("""
+                <div class="warning-box">
+                    <h4>💡 Troubleshooting Tips:</h4>
+                    <ul>
+                        <li>Make sure the ChromaDB data directory exists at <code>data/chroma_db/</code></li>
+                        <li>Check if all required models are available</li>
+                        <li>Verify your internet connection for model downloads</li>
+                        <li>Ensure sufficient GPU memory is available</li>
+                    </ul>
+                </div>
+                """, unsafe_allow_html=True)
                 st.stop()
                 
             st.session_state.rag_pipeline = pipeline
             st.session_state.pipeline_config = config
             st.session_state.initialized = True
             
-            st.success("✅ Pipeline initialized successfully!")
-            
         except Exception as e:
             st.error(f"❌ Initialization failed: {e}")
-            st.info("💡 Make sure you've downloaded the ChromaDB data to the data/ directory")
             st.stop()
 
 # ============================================================================
@@ -317,7 +408,8 @@ with st.sidebar:
     if use_filter:
         categories = [
             "Pneumonia", "Diabetes", "Heart Failure", "Stroke", 
-            "COPD", "Hypertension", "Acute Coronary Syndrome"
+            "COPD", "Hypertension", "Acute Coronary Syndrome", "Asthma",
+            "Renal Disease", "Mental Health"
         ]
         selected_category = st.selectbox("Select Category", options=categories)
     
@@ -327,11 +419,26 @@ with st.sidebar:
     if st.session_state.avg_response_time > 0:
         st.metric("Avg Time", f"{st.session_state.avg_response_time:.1f}s")
     
-    if st.button("🧹 Clear Memory", use_container_width=True):
-        cleanup_memory()
-        st.toast("✅ Memory cleared!")
-        time.sleep(0.5)
-        st.rerun()
+    # Database management
+    st.markdown("---")
+    st.markdown("### 🗄️ Database")
+    
+    if st.session_state.rag_pipeline:
+        collection = st.session_state.rag_pipeline.chroma_collection
+        if collection:
+            st.metric("Documents", collection.count())
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🔄 Refresh DB", use_container_width=True):
+            st.session_state.initialized = False
+            st.rerun()
+    
+    with col2:
+        if st.button("🧹 Clear Memory", use_container_width=True):
+            cleanup_memory()
+            st.toast("✅ Memory cleared!")
+            time.sleep(0.5)
 
 # ============================================================================
 # MAIN QUERY INTERFACE
@@ -341,9 +448,11 @@ st.markdown("## 💬 Ask Your Clinical Question")
 
 example_queries = [
     "What are the main symptoms of pneumonia?",
-    "How is diabetes diagnosed?",
-    "What causes heart failure?",
-    "List stroke risk factors",
+    "How is diabetes diagnosed and managed?",
+    "What are the treatment options for heart failure?",
+    "What are the risk factors for stroke?",
+    "How is hypertension managed?",
+    "What are the symptoms of COPD?",
 ]
 
 col1, col2 = st.columns([4, 1])
@@ -352,8 +461,8 @@ with col1:
     query = st.text_area(
         "Enter your question:",
         height=100,
-        placeholder="e.g., What are the symptoms of pneumonia?",
-        help="Ask about symptoms, diagnoses, treatments, etc."
+        placeholder="e.g., What are the symptoms and treatment for pneumonia?",
+        help="Ask about symptoms, diagnoses, treatments, risk factors, etc."
     )
 
 with col2:
@@ -420,12 +529,13 @@ if search_clicked and query.strip():
         st.markdown("### 📊 Results")
         
         metric_cols = st.columns(4)
+        sources_count = len(result.get('sources', []))
         retrieval_time = result['metadata'].get('retrieval_time', 0) * 1000
         generation_time = result['metadata'].get('generation_time', 0)
         output_tokens = result['metadata'].get('output_tokens', 0)
         
         metrics_data = [
-            ("⚡", len(result.get('sources', [])), "Sources"),
+            ("⚡", sources_count, "Sources"),
             ("🎯", f"{retrieval_time:.0f}ms", "Retrieval"),
             ("🤖", f"{generation_time:.1f}s", "Generation"),
             ("📝", output_tokens, "Tokens")
@@ -455,22 +565,24 @@ if search_clicked and query.strip():
             
             for i, source in enumerate(sources, 1):
                 similarity = source.get('similarity', 0)
-                category = source.get('metadata', {}).get('disease_category', 'Unknown')
+                metadata = source.get('metadata', {})
+                category = metadata.get('disease_category', 'Unknown')
+                doc_type = metadata.get('document_type', 'Clinical Note')
                 
-                with st.expander(f"📄 #{i}: {category} ({similarity:.0%})"):
+                with st.expander(f"📄 #{i}: {category} - {doc_type} ({similarity:.0%} match)"):
                     st.markdown(f"**Confidence:** {similarity:.1%}")
                     st.progress(similarity)
                     
-                    text_content = source.get('text', '')[:400]
-                    st.text_area("Preview", value=text_content, height=120, 
+                    text_content = source.get('text', '')[:500] + "..." if len(source.get('text', '')) > 500 else source.get('text', '')
+                    st.text_area("Content", value=text_content, height=120, 
                                key=f"src_{i}", label_visibility="collapsed")
         
-        st.success(f"✅ Completed in {total_time:.1f}s")
+        st.success(f"✅ Analysis completed in {total_time:.1f}s")
         
     except Exception as e:
         progress_bar.empty()
         status_text.empty()
-        st.error(f"❌ Error: {str(e)}")
+        st.error(f"❌ Error processing query: {str(e)}")
         
 elif search_clicked:
     st.warning("⚠️ Please enter a question")
@@ -481,7 +593,7 @@ elif search_clicked:
 if st.session_state.query_history:
     st.markdown("---")
     with st.expander("📜 Recent Queries"):
-        for i, item in enumerate(st.session_state.query_history[:3]):
+        for i, item in enumerate(st.session_state.query_history[:5]):
             st.caption(f"{i+1}. {item['query'][:80]}... ({item['timestamp']})")
 
 # Footer
@@ -490,6 +602,9 @@ st.markdown("""
 <div style="text-align: center; padding: 1rem; color: white;">
     <p style="color: rgba(255,255,255,0.8);">
         🏥 Clinical RAG Assistant • Medical Document Retrieval System
+    </p>
+    <p style="color: rgba(255,255,255,0.6); font-size: 0.8rem;">
+        Note: This system uses sample clinical data for demonstration purposes.
     </p>
 </div>
 """, unsafe_allow_html=True)
