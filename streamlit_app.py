@@ -157,6 +157,33 @@ def get_chromadb_collection():
         return None
 
 # ============================================================================
+# SIMPLE GENERATION FUNCTION (No Large Model)
+# ============================================================================
+def generate_simple_answer(query, documents):
+    """Generate answer without loading large language model"""
+    if not documents:
+        return "I couldn't find any relevant clinical documents to answer your question."
+    
+    # Extract key information from documents
+    disease_categories = list(set([doc['metadata'].get('disease_category', 'Unknown') for doc in documents]))
+    severities = list(set([doc['metadata'].get('severity', 'Unknown') for doc in documents]))
+    
+    # Create a simple template-based response
+    response = f"Based on the clinical documents about {', '.join(disease_categories)}, here's what I found:\n\n"
+    
+    for i, doc in enumerate(documents[:3], 1):
+        disease = doc['metadata'].get('disease_category', 'Unknown')
+        severity = doc['metadata'].get('severity', 'Unknown')
+        confidence = doc.get('similarity', 0)
+        
+        response += f"{i}. For {disease} ({severity} severity): "
+        response += f"{doc['text'][:150]}... (Confidence: {confidence:.1%})\n\n"
+    
+    response += "Note: This is a simplified demonstration. A full implementation would use a language model for more detailed responses."
+    
+    return response
+
+# ============================================================================
 # PAGE CONFIGURATION
 # ============================================================================
 st.set_page_config(
@@ -239,6 +266,14 @@ st.markdown("""
         padding: 1rem;
         margin: 1rem 0;
     }
+    
+    .info-box {
+        background: rgba(23, 162, 184, 0.1);
+        border: 1px solid #17a2b8;
+        border-radius: 10px;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -250,14 +285,6 @@ def load_rag_pipeline():
     """Load RAG pipeline components with memory optimization"""
     import torch
     from sentence_transformers import SentenceTransformer
-    from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
-    
-    # Import from src directory
-    try:
-        from src.rag_pipeline import RAGPipelineMistral
-    except ImportError:
-        st.error("❌ Could not import RAGPipelineMistral from src directory")
-        return None, None
     
     # Clear memory before loading
     cleanup_memory()
@@ -267,76 +294,81 @@ def load_rag_pipeline():
     if collection is None:
         return None, None
     
-    # Configuration
+    # Configuration - Using smaller models for deployment
     config = {
         'chroma_db_path': "data/chroma_db",
         'collection_name': "clinical_notes",
-        'model_name': "intfloat/e5-small-v2",
-        'generation_model_name': "mistralai/Mistral-7B-Instruct-v0.2"
+        'model_name': "all-MiniLM-L6-v2",  # Smaller embedding model
+        'device': "cpu"  # Force CPU for deployment
     }
     
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = config['device']
     st.info(f"🖥️ Using device: {device}")
 
     try:
-        # Load embedding model
+        # Load embedding model (much smaller)
         st.info("📥 Loading embedding model...")
         embedding_model = SentenceTransformer(config['model_name'], device=device)
         
-        # Load tokenizer
-        st.info("🔤 Loading tokenizer...")
-        tokenizer = AutoTokenizer.from_pretrained(config['generation_model_name'])
-        
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-        
-        # Configure 4-bit quantization
-        st.info("⚙️ Configuring model quantization...")
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16
-        )
-        
-        # Load model
-        st.info("🧠 Loading language model...")
-        model = AutoModelForCausalLM.from_pretrained(
-            config['generation_model_name'],
-            quantization_config=bnb_config,
-            device_map="auto",
-            low_cpu_mem_usage=True,
-            torch_dtype=torch.bfloat16,
-            trust_remote_code=True
-        )
-        
-        # Create pipeline
-        st.info("🔧 Creating RAG pipeline...")
-        pipeline = RAGPipelineMistral(
-            chroma_collection=collection,
-            embedding_model=embedding_model,
-            generation_model=model,
-            tokenizer=tokenizer,
-            max_context_tokens=1500,
-            max_input_length=3072
-        )
-        
-        # Update generation config
-        pipeline.generation_config.update({
-            'max_new_tokens': 256,
-            'temperature': 0.7,
-            'top_p': 0.9,
-            'top_k': 50,
-            'repetition_penalty': 1.1,
-            'do_sample': True,
-        })
-        
         st.success("✅ RAG pipeline initialized successfully!")
-        return pipeline, config
+        st.info("💡 Using retrieval-only mode for deployment")
+        
+        return {
+            'collection': collection,
+            'embedding_model': embedding_model,
+            'config': config
+        }, config
         
     except Exception as e:
         st.error(f"❌ Error loading pipeline: {str(e)}")
         return None, None
+
+# ============================================================================
+# RETRIEVAL FUNCTION
+# ============================================================================
+def retrieve_documents(_pipeline, query: str, top_k: int = 5, filters: dict = None):
+    """Retrieve documents using the pipeline"""
+    try:
+        retrieval_start = time.time()
+        
+        # Encode query
+        query_embedding = _pipeline['embedding_model'].encode(
+            query,
+            normalize_embeddings=True,
+            convert_to_numpy=True
+        )
+        
+        # Query ChromaDB
+        query_params = {
+            'query_embeddings': [query_embedding.tolist()],
+            'n_results': top_k
+        }
+        if filters:
+            query_params['where'] = filters
+        
+        results = _pipeline['collection'].query(**query_params)
+        
+        retrieved_docs = []
+        if results['ids'] and results['ids'][0]:
+            for i, (doc_id, document, metadata, distance) in enumerate(zip(
+                results['ids'][0], results['documents'][0], 
+                results['metadatas'][0], results['distances'][0]
+            )):
+                retrieved_docs.append({
+                    'rank': i + 1,
+                    'doc_id': doc_id,
+                    'text': document,
+                    'similarity': 1 - distance,
+                    'distance': distance,
+                    'metadata': metadata or {}
+                })
+        
+        retrieval_time = time.time() - retrieval_start
+        return retrieved_docs, retrieval_time
+        
+    except Exception as e:
+        st.error(f"❌ Retrieval error: {e}")
+        return [], 0
 
 # ============================================================================
 # SESSION STATE
@@ -367,7 +399,6 @@ if not st.session_state.initialized:
                         <li>Make sure the ChromaDB data directory exists at <code>data/chroma_db/</code></li>
                         <li>Check if all required models are available</li>
                         <li>Verify your internet connection for model downloads</li>
-                        <li>Ensure sufficient GPU memory is available</li>
                     </ul>
                 </div>
                 """, unsafe_allow_html=True)
@@ -376,6 +407,14 @@ if not st.session_state.initialized:
             st.session_state.rag_pipeline = pipeline
             st.session_state.pipeline_config = config
             st.session_state.initialized = True
+            
+            st.markdown("""
+            <div class="info-box">
+                <h4>🔬 Demo Mode Active</h4>
+                <p>This deployment uses a lightweight version with document retrieval only. 
+                For full LLM capabilities, run locally with GPU support.</p>
+            </div>
+            """, unsafe_allow_html=True)
             
         except Exception as e:
             st.error(f"❌ Initialization failed: {e}")
@@ -399,9 +438,7 @@ st.markdown("""
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
     
-    top_k = st.slider("📊 Top K Results", 1, 5, 3)
-    temperature = st.slider("🌡️ Temperature", 0.0, 1.0, 0.7, 0.1)
-    max_tokens = st.slider("📝 Max Output Tokens", 128, 512, 256, 64)
+    top_k = st.slider("📊 Top K Results", 1, 10, 5)
     
     use_filter = st.checkbox("🔍 Enable Disease Filter", value=False)
     selected_category = None
@@ -417,27 +454,27 @@ with st.sidebar:
     st.markdown("### 📊 Statistics")
     st.metric("Total Queries", st.session_state.total_queries)
     if st.session_state.avg_response_time > 0:
-        st.metric("Avg Time", f"{st.session_state.avg_response_time:.1f}s")
+        st.metric("Avg Response Time", f"{st.session_state.avg_response_time:.2f}s")
     
     # Database management
     st.markdown("---")
     st.markdown("### 🗄️ Database")
     
     if st.session_state.rag_pipeline:
-        collection = st.session_state.rag_pipeline.chroma_collection
+        collection = st.session_state.rag_pipeline['collection']
         if collection:
             st.metric("Documents", collection.count())
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("🔄 Refresh DB", use_container_width=True):
+        if st.button("🔄 Refresh", use_container_width=True):
             st.session_state.initialized = False
             st.rerun()
     
     with col2:
-        if st.button("🧹 Clear Memory", use_container_width=True):
+        if st.button("🧹 Clean Memory", use_container_width=True):
             cleanup_memory()
-            st.toast("✅ Memory cleared!")
+            st.toast("✅ Memory cleaned!")
             time.sleep(0.5)
 
 # ============================================================================
@@ -467,7 +504,7 @@ with col1:
 
 with col2:
     st.markdown("<br>", unsafe_allow_html=True)
-    search_clicked = st.button("🔍 Analyze", type="primary", use_container_width=True)
+    search_clicked = st.button("🔍 Search", type="primary", use_container_width=True)
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("🎲 Example", use_container_width=True):
         query = np.random.choice(example_queries)
@@ -493,25 +530,28 @@ if search_clicked and query.strip():
     status_text = st.empty()
     
     status_text.info("🔍 Analyzing query...")
-    progress_bar.progress(20)
+    progress_bar.progress(30)
     
     try:
         start_time = time.time()
         
-        status_text.info("🧠 Retrieving documents...")
-        progress_bar.progress(40)
+        status_text.info("📚 Retrieving documents...")
+        progress_bar.progress(60)
         
-        # Generate answer
-        result = st.session_state.rag_pipeline.generate_answer(
-            query=query,
-            top_k=top_k,
-            filters=filters,
-            temperature=temperature,
-            max_new_tokens=max_tokens,
-            show_progress=False
+        # Retrieve documents
+        documents, retrieval_time = retrieve_documents(
+            st.session_state.rag_pipeline, 
+            query, 
+            top_k=top_k, 
+            filters=filters
         )
         
         progress_bar.progress(80)
+        
+        # Generate simple answer
+        answer = generate_simple_answer(query, documents)
+        
+        progress_bar.progress(100)
         cleanup_memory()
         
         total_time = time.time() - start_time
@@ -520,25 +560,19 @@ if search_clicked and query.strip():
             / st.session_state.total_queries
         )
         
-        progress_bar.progress(100)
-        time.sleep(0.3)
         progress_bar.empty()
         status_text.empty()
         
         # Display results
         st.markdown("### 📊 Results")
         
-        metric_cols = st.columns(4)
-        sources_count = len(result.get('sources', []))
-        retrieval_time = result['metadata'].get('retrieval_time', 0) * 1000
-        generation_time = result['metadata'].get('generation_time', 0)
-        output_tokens = result['metadata'].get('output_tokens', 0)
+        metric_cols = st.columns(3)
+        sources_count = len(documents)
         
         metrics_data = [
-            ("⚡", sources_count, "Sources"),
-            ("🎯", f"{retrieval_time:.0f}ms", "Retrieval"),
-            ("🤖", f"{generation_time:.1f}s", "Generation"),
-            ("📝", output_tokens, "Tokens")
+            ("⚡", sources_count, "Sources Found"),
+            ("🎯", f"{retrieval_time*1000:.0f}ms", "Retrieval Time"),
+            ("📊", f"{total_time:.2f}s", "Total Time")
         ]
         
         for col, (icon, value, label) in zip(metric_cols, metrics_data):
@@ -553,31 +587,33 @@ if search_clicked and query.strip():
         
         st.markdown("---")
         
-        # AI Answer
-        st.markdown("### 🤖 AI Answer")
-        answer_text = result.get('answer', 'No answer generated.')
-        st.info(answer_text)
+        # Answer
+        st.markdown("### 🤖 Retrieved Information")
+        st.info(answer)
         
         # Sources
-        sources = result.get('sources', [])
-        if sources:
+        if documents:
             st.markdown("### 📚 Retrieved Sources")
             
-            for i, source in enumerate(sources, 1):
+            for i, source in enumerate(documents, 1):
                 similarity = source.get('similarity', 0)
                 metadata = source.get('metadata', {})
                 category = metadata.get('disease_category', 'Unknown')
                 doc_type = metadata.get('document_type', 'Clinical Note')
+                severity = metadata.get('severity', 'Unknown')
                 
                 with st.expander(f"📄 #{i}: {category} - {doc_type} ({similarity:.0%} match)"):
                     st.markdown(f"**Confidence:** {similarity:.1%}")
+                    st.markdown(f"**Severity:** {severity}")
+                    st.markdown(f"**Category:** {category}")
                     st.progress(similarity)
                     
-                    text_content = source.get('text', '')[:500] + "..." if len(source.get('text', '')) > 500 else source.get('text', '')
-                    st.text_area("Content", value=text_content, height=120, 
+                    # Display full text
+                    st.markdown("**Document Content:**")
+                    st.text_area("", value=source['text'], height=150, 
                                key=f"src_{i}", label_visibility="collapsed")
         
-        st.success(f"✅ Analysis completed in {total_time:.1f}s")
+        st.success(f"✅ Search completed in {total_time:.2f}s")
         
     except Exception as e:
         progress_bar.empty()
@@ -604,7 +640,7 @@ st.markdown("""
         🏥 Clinical RAG Assistant • Medical Document Retrieval System
     </p>
     <p style="color: rgba(255,255,255,0.6); font-size: 0.8rem;">
-        Note: This system uses sample clinical data for demonstration purposes.
+        Note: This deployment uses retrieval-only mode. For full LLM capabilities, run locally.
     </p>
 </div>
 """, unsafe_allow_html=True)
