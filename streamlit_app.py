@@ -13,41 +13,119 @@ import json
 import gc
 from datetime import datetime
 import os
+import numpy as np
 
 # Configure page
 st.set_page_config(
-    page_title="Clinical RAG Assistant",
+    page_title="Clinical RAG Assistant Ultra",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Add custom CSS
+# Add custom CSS - Enhanced UI from memory-optimized version
 st.markdown("""
 <style>
-    .main-header {
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+    
+    * { font-family: 'Inter', sans-serif; }
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    
+    .main {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background-attachment: fixed;
+    }
+    
+    .hero-header {
+        background: rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(10px);
+        border-radius: 20px;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        padding: 3rem;
+        margin-bottom: 2rem;
+        text-align: center;
+        box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+    }
+    
+    .hero-header h1 {
+        color: white;
+        font-size: 3rem;
+        font-weight: 700;
+        margin-bottom: 1rem;
+    }
+    
+    .glass-card {
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(10px);
+        border-radius: 15px;
+        padding: 2rem;
+        margin: 1rem 0;
+        box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    .metric-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 1.5rem;
+        border-radius: 15px;
+        text-align: center;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        transition: all 0.3s ease;
+    }
+    
+    .metric-card:hover {
+        transform: translateY(-5px) rotate(2deg);
+    }
+    
+    .metric-value {
         font-size: 2.5rem;
         font-weight: 700;
-        color: #1f77b4;
-        text-align: center;
-        margin-bottom: 2rem;
+        color: white;
     }
-    .metric-card {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
+    
+    .metric-label {
+        color: rgba(255,255,255,0.9);
+        font-size: 0.9rem;
+        margin-top: 0.5rem;
+        text-transform: uppercase;
     }
+    
     .source-card {
-        background-color: #ffffff;
-        border: 1px solid #e0e0e0;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
+        background: white;
+        padding: 1.5rem;
+        border-radius: 15px;
+        margin: 1rem 0;
+        border-left: 5px solid #667eea;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        transition: all 0.3s ease;
     }
-    .stAlert {
-        margin-top: 1rem;
+    
+    .stButton button {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        border-radius: 25px;
+        padding: 0.75rem 2rem;
+        font-size: 1.1rem;
+        font-weight: 600;
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        transition: all 0.3s ease;
     }
+    
+    .stButton button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+    }
+    
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
+    }
+    
+    [data-testid="stSidebar"] * {
+        color: white !important;
+    }
+    
     .model-loading {
         background: linear-gradient(90deg, #ff6b6b, #feca57, #48dbfb, #ff9ff3);
         background-size: 400% 400%;
@@ -57,6 +135,7 @@ st.markdown("""
         color: white;
         text-align: center;
     }
+    
     @keyframes gradient {
         0% { background-position: 0% 50%; }
         50% { background-position: 100% 50%; }
@@ -76,6 +155,38 @@ if 'loading_progress' not in st.session_state:
     st.session_state.loading_progress = 0
 if 'loading_status' not in st.session_state:
     st.session_state.loading_status = "Ready to load models"
+
+# ============================================================================
+# MEMORY MANAGEMENT UTILITIES
+# ============================================================================
+def cleanup_memory():
+    """Aggressive memory cleanup"""
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+    except:
+        pass
+
+def get_gpu_memory():
+    """Get current GPU memory stats"""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            allocated = torch.cuda.memory_allocated(0) / 1e9
+            reserved = torch.cuda.memory_reserved(0) / 1e9
+            total = torch.cuda.get_device_properties(0).total_memory / 1e9
+            return {
+                'allocated': allocated,
+                'reserved': reserved,
+                'free': total - reserved,
+                'total': total
+            }
+    except:
+        pass
+    return None
 
 @st.cache_resource(show_spinner=False)
 def load_rag_pipeline():
@@ -150,9 +261,19 @@ def load_rag_pipeline():
             embedding_model=embedding_model,
             generation_model=model,
             tokenizer=tokenizer,
-            max_context_tokens=2000,
-            max_input_length=4096
+            max_context_tokens=1500,  # Reduced for memory efficiency
+            max_input_length=3072     # Reduced for memory efficiency
         )
+        
+        # Override generation config for memory efficiency
+        rag_pipeline.generation_config.update({
+            'max_new_tokens': 256,    # Reduced from 512
+            'temperature': 0.7,
+            'top_p': 0.9,
+            'top_k': 50,
+            'repetition_penalty': 1.1,
+            'do_sample': True,
+        })
         
         st.session_state.loading_progress = 100
         st.session_state.loading_status = "✅ Models loaded successfully!"
@@ -209,18 +330,24 @@ def check_disk_space():
         return True  # If we can't check, assume it's fine
 
 def main():
-    # Header
-    st.markdown('<h1 class="main-header">🏥 Clinical RAG Assistant</h1>', unsafe_allow_html=True)
+    # Enhanced Hero Header
     st.markdown("""
-    <p style='text-align: center; color: #666; margin-bottom: 2rem;'>
-    AI-powered clinical decision support system using MIMIC-IV-EXT dataset<br>
-    <em>E5 Embeddings + Mistral-7B (4-bit) | 934 Clinical Cases | 25 Disease Categories</em>
-    </p>
+    <div class="hero-header">
+        <h1>✨ Clinical RAG Assistant Ultra</h1>
+        <p style="color: white; font-size: 1.2rem;">
+            Memory-optimized • Advanced RAG System • Hugging Face Hub Integration
+        </p>
+        <div style="margin-top: 1rem;">
+            <span style="background: rgba(255,255,255,0.2); padding: 0.5rem 1rem; border-radius: 20px; margin: 0.5rem; color: white;">⚡ Fast</span>
+            <span style="background: rgba(255,255,255,0.2); padding: 0.5rem 1rem; border-radius: 20px; margin: 0.5rem; color: white;">🧠 Smart</span>
+            <span style="background: rgba(255,255,255,0.2); padding: 0.5rem 1rem; border-radius: 20px; margin: 0.5rem; color: white;">💾 Optimized</span>
+        </div>
+    </div>
     """, unsafe_allow_html=True)
     
-    # Sidebar
+    # Enhanced Sidebar
     with st.sidebar:
-        st.header("⚙️ Configuration")
+        st.markdown("### ⚙️ Settings")
         
         # Model loading section
         if not st.session_state.model_loaded:
@@ -264,17 +391,17 @@ def main():
         
         st.divider()
         
-        # Query parameters
+        # Enhanced Query Parameters
         st.subheader("Query Parameters")
-        top_k = st.slider("Documents to retrieve", 1, 10, 5)
-        temperature = st.slider("Generation temperature", 0.1, 1.0, 0.7, 0.1)
-        max_tokens = st.slider("Max new tokens", 128, 512, 256, 32)
+        top_k = st.slider("📊 Top K Results", 1, 5, 3, help="Fewer results = less memory")
+        temperature = st.slider("🌡️ Temperature", 0.0, 1.0, 0.7, 0.1)
+        max_tokens = st.slider("📝 Max Output Tokens", 128, 512, 256, 64, help="Lower = less memory, faster generation")
         
         st.divider()
         
         # Disease filter
         st.subheader("Filter by Disease")
-        use_filter = st.checkbox("Enable disease filter")
+        use_filter = st.checkbox("🔍 Enable Disease Filter", value=False)
         disease_category = None
         if use_filter:
             categories = [
@@ -283,18 +410,38 @@ def main():
                 "Hypertension", "Gastro-oesophageal Reflux Disease",
                 "Multiple Sclerosis", "Pulmonary Embolism"
             ]
-            disease_category = st.selectbox("Select disease category", categories)
+            disease_category = st.selectbox("Select Category", options=categories)
         
         st.divider()
         
-        # System info
-        st.subheader("📊 System Info")
-        if st.session_state.model_loaded:
-            st.metric("Status", "🟢 Online")
-            st.metric("Documents", "934")
-            st.metric("Categories", "25")
-        else:
-            st.metric("Status", "🔴 Offline")
+        # GPU Memory Monitor (Enhanced)
+        st.markdown("### 🎮 System Status")
+        mem = get_gpu_memory()
+        if mem:
+            usage_pct = (mem['allocated'] / mem['total']) * 100
+            st.metric("Memory Used", f"{mem['allocated']:.1f}GB", 
+                     delta=f"{usage_pct:.0f}%")
+            
+            # Memory warning
+            if usage_pct > 80:
+                st.warning("⚠️ High memory usage", icon="⚠️")
+            elif usage_pct > 60:
+                st.info("💡 Moderate usage", icon="💡")
+            else:
+                st.success("✅ Good memory", icon="✅")
+        
+        st.markdown("---")
+        st.markdown("### 📊 Statistics")
+        st.metric("Total Queries", st.session_state.total_queries)
+        if st.session_state.avg_response_time > 0:
+            st.metric("Avg Time", f"{st.session_state.avg_response_time:.1f}s")
+        
+        # Manual cleanup button
+        if st.button("🧹 Clear Memory", use_container_width=True):
+            cleanup_memory()
+            st.toast("✅ Memory cleared!", icon="✅")
+            time.sleep(0.5)
+            st.rerun()
         
         # Query history
         st.divider()
@@ -327,13 +474,37 @@ def main():
                 with cols[i % 2]:
                     st.info(f"💡 {example}")
             
-            # Dataset statistics
+            # Dataset statistics with enhanced cards
             st.subheader("📈 Dataset Statistics")
             col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Total Cases", "511")
-            col2.metric("Text Chunks", "934")
-            col3.metric("Disease Categories", "25")
-            col4.metric("Avg Chunk Length", "311 tokens")
+            with col1:
+                st.markdown("""
+                <div class="metric-card">
+                    <div class="metric-value">511</div>
+                    <div class="metric-label">Total Cases</div>
+                </div>
+                """, unsafe_allow_html=True)
+            with col2:
+                st.markdown("""
+                <div class="metric-card">
+                    <div class="metric-value">934</div>
+                    <div class="metric-label">Text Chunks</div>
+                </div>
+                """, unsafe_allow_html=True)
+            with col3:
+                st.markdown("""
+                <div class="metric-card">
+                    <div class="metric-value">25</div>
+                    <div class="metric-label">Categories</div>
+                </div>
+                """, unsafe_allow_html=True)
+            with col4:
+                st.markdown("""
+                <div class="metric-card">
+                    <div class="metric-value">311</div>
+                    <div class="metric-label">Avg Tokens</div>
+                </div>
+                """, unsafe_allow_html=True)
         
         else:
             # Show loading animation
@@ -358,120 +529,212 @@ def main():
         
         return
     
-    # Query input
-    query = st.text_area(
-        "🔍 Enter your clinical question:",
-        height=100,
-        placeholder="e.g., What are the symptoms of pneumonia with complications?"
-    )
-    
-    col1, col2, col3 = st.columns([2, 1, 1])
+    # Enhanced Query Interface
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.markdown("## 💬 Ask Your Clinical Question")
+
+    example_queries = [
+        "What are the main symptoms of pneumonia?",
+        "How is diabetes diagnosed?",
+        "What causes heart failure?",
+        "List stroke risk factors",
+    ]
+
+    col1, col2 = st.columns([4, 1])
+
     with col1:
-        submit = st.button("🔎 Search & Generate Answer", type="primary", use_container_width=True)
+        query = st.text_area(
+            "Enter your question:",
+            height=120,
+            placeholder="e.g., What are the symptoms of pneumonia?",
+            help="Keep queries focused for better results"
+        )
+
     with col2:
-        show_sources = st.checkbox("Show sources", value=True)
-    with col3:
-        show_metadata = st.checkbox("Show metadata", value=True)
-    
-    if submit and query:
-        if not st.session_state.model_loaded:
-            st.error("Please load models first!")
-            return
+        st.markdown("<br>", unsafe_allow_html=True)
+        search_clicked = st.button("🔍 Analyze", type="primary", use_container_width=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🎲 Random", use_container_width=True):
+            query = np.random.choice(example_queries)
+            st.rerun()
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Enhanced Query Processing
+    if search_clicked and query.strip():
+        # Clear memory before processing
+        cleanup_memory()
+        
+        st.session_state.query_history.insert(0, {
+            'query': query,
+            'timestamp': datetime.now().strftime('%H:%M:%S')
+        })
+        st.session_state.total_queries += 1
+        
+        filters = {"disease_category": disease_category} if use_filter and disease_category else None
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        status_text.info("🔍 Analyzing query...")
+        progress_bar.progress(20)
         
         try:
+            start_time = time.time()
+            
+            status_text.info("🧠 Retrieving documents...")
+            progress_bar.progress(40)
+            
             # Generate answer
-            with st.spinner("🔍 Retrieving relevant documents..."):
-                filters = {"disease_category": disease_category} if use_filter and disease_category else None
-                
-                start_time = time.time()
-                result = st.session_state.rag_pipeline.generate_answer(
-                    query=query,
-                    top_k=top_k,
-                    filters=filters,
-                    temperature=temperature,
-                    max_new_tokens=max_tokens,
-                    show_progress=False
-                )
-                total_time = time.time() - start_time
+            result = st.session_state.rag_pipeline.generate_answer(
+                query=query,
+                top_k=top_k,
+                filters=filters,
+                temperature=temperature,
+                max_new_tokens=max_tokens,
+                show_progress=False
+            )
             
-            # Store in history
-            st.session_state.query_history.append({
-                'query': query,
-                'time': total_time,
-                'docs': len(result.get('sources', []))
-            })
+            progress_bar.progress(80)
+            cleanup_memory()
             
-            # Display results
-            st.success("✅ Answer generated successfully!")
+            total_time = time.time() - start_time
+            st.session_state.avg_response_time = (
+                (st.session_state.avg_response_time * (st.session_state.total_queries - 1) + total_time) 
+                / st.session_state.total_queries
+            )
             
-            # Metrics
-            col1, col2, col3, col4 = st.columns(4)
+            progress_bar.progress(100)
+            time.sleep(0.3)
+            progress_bar.empty()
+            status_text.empty()
+            
+            # Enhanced Results Display
+            st.markdown("### 📊 Query Performance")
+            
+            metric_cols = st.columns(5)
             metadata = result.get('metadata', {})
-            col1.metric("⏱️ Total Time", f"{total_time:.2f}s")
-            col2.metric("📄 Documents", len(result.get('sources', [])))
-            col3.metric("🔤 Tokens Generated", metadata.get('output_tokens', 'N/A'))
-            col4.metric("🎯 Retrieval Time", f"{metadata.get('retrieval_time', 0)*1000:.0f}ms")
+            retrieval_time = metadata.get('retrieval_time', 0) * 1000
+            generation_time = metadata.get('generation_time', 0)
+            output_tokens = metadata.get('output_tokens', 'N/A')
+            sources_count = len(result.get('sources', []))
             
-            # Answer
-            st.subheader("💬 Generated Answer")
-            st.markdown(f"""
-            <div style='background-color: #f8f9fa; padding: 1.5rem; border-radius: 0.5rem; border-left: 4px solid #1f77b4;'>
-                {result['answer']}
-            </div>
-            """, unsafe_allow_html=True)
+            metrics_data = [
+                ("⚡", sources_count, "Sources"),
+                ("🎯", f"{retrieval_time:.0f}ms", "Retrieval"),
+                ("🤖", f"{generation_time:.1f}s", "Generation"),
+                ("📝", output_tokens, "Tokens"),
+                ("⏱️", f"{total_time:.2f}s", "Total")
+            ]
             
-            # Sources
-            if show_sources and result.get('sources'):
-                st.subheader("📚 Retrieved Sources")
+            for col, (icon, value, label) in zip(metric_cols, metrics_data):
+                with col:
+                    st.markdown(f"""
+                    <div class="metric-card">
+                        <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">{icon}</div>
+                        <div class="metric-value">{value}</div>
+                        <div class="metric-label">{label}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            
+            st.markdown("---")
+            
+            # Enhanced Answer Display
+            st.markdown("### 🤖 AI-Generated Answer")
+            answer_text = result.get('answer', 'No answer generated')
+            st.info(answer_text)
+            
+            # Copy button
+            if st.button("📋 Copy Answer", use_container_width=False):
+                st.toast("✅ Copied!", icon="✅")
+            
+            st.markdown("---")
+            
+            # Enhanced Sources Display
+            sources = result.get('sources', [])
+            if sources:
+                st.markdown("### 📚 Retrieved Sources")
                 
-                for i, source in enumerate(result['sources'][:5], 1):
-                    with st.expander(f"📄 Source {i} - {source['metadata'].get('disease_category', 'Unknown')} (Similarity: {source['similarity']:.4f})"):
-                        if show_metadata:
-                            st.markdown(format_metadata(source['metadata']))
-                            st.divider()
+                similarities = [s.get('similarity', 0) for s in sources]
+                avg_similarity = np.mean(similarities) if similarities else 0
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("📊 Confidence", f"{avg_similarity:.1%}")
+                with col2:
+                    st.metric("📄 Sources", len(sources))
+                with col3:
+                    high_q = sum(1 for s in similarities if s > 0.7)
+                    st.metric("⭐ High Quality", high_q)
+                
+                for i, source in enumerate(sources, 1):
+                    similarity = source.get('similarity', 0)
+                    category = source.get('metadata', {}).get('disease_category', 'Unknown')
+                    
+                    with st.expander(f"📄 #{i}: {category} ({similarity:.0%})", 
+                                   expanded=(i == 1)):
+                        st.markdown(f"**Confidence:** {similarity:.1%}")
+                        st.progress(similarity)
                         
-                        st.markdown(f"**Document Text:**")
-                        st.text_area(
-                            "Content",
-                            source['text'][:500] + "..." if len(source['text']) > 500 else source['text'],
-                            height=150,
-                            key=f"source_{i}",
-                            label_visibility="collapsed"
-                        )
+                        text_content = source.get('text', '')[:500]
+                        st.text_area("Preview", value=text_content, height=150, 
+                                   key=f"src_{i}", label_visibility="collapsed")
             
-            # Generation metadata
-            if show_metadata:
-                with st.expander("🔧 Generation Metadata"):
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.json({
-                            "retrieval_time_ms": round(metadata.get('retrieval_time', 0) * 1000, 2),
-                            "generation_time_ms": round(metadata.get('generation_time', 0) * 1000, 2),
-                            "input_tokens": metadata.get('input_tokens', 'N/A'),
-                            "output_tokens": metadata.get('output_tokens', 'N/A')
-                        })
-                    with col2:
-                        st.json({
-                            "temperature": temperature,
-                            "top_k": top_k,
-                            "max_new_tokens": max_tokens,
-                            "disease_filter": disease_category if use_filter else "None"
-                        })
-        
+            st.success(f"✅ Completed in {total_time:.1f}s", icon="✅")
+            
+            # Show final memory state
+            mem = get_gpu_memory()
+            if mem:
+                st.caption(f"🎮 GPU: {mem['allocated']:.1f}GB / {mem['total']:.1f}GB")
+            
+        except RuntimeError as e:
+            progress_bar.empty()
+            status_text.empty()
+            
+            if "out of memory" in str(e).lower():
+                st.error("❌ GPU Out of Memory!", icon="❌")
+                st.warning("""
+                **Quick Fixes:**
+                1. Click "🧹 Clear Memory" in sidebar
+                2. Reduce "Max Output Tokens" to 128
+                3. Reduce "Top K Results" to 1-2
+                4. Restart the app if issue persists
+                """)
+                
+                # Attempt recovery
+                cleanup_memory()
+            else:
+                st.error(f"❌ Error: {str(e)}", icon="❌")
+                
         except Exception as e:
-            st.error(f"❌ Error generating answer: {str(e)}")
-            st.exception(e)
-    
-    elif submit:
-        st.warning("Please enter a query first!")
-    
-    # Footer
-    st.divider()
+            progress_bar.empty()
+            status_text.empty()
+            st.error(f"❌ Error: {str(e)}", icon="❌")
+            
+    elif search_clicked:
+        st.warning("⚠️ Please enter a question", icon="⚠️")
+
+    # Enhanced Query History
+    if st.session_state.query_history:
+        st.markdown("---")
+        with st.expander("📜 Query History", expanded=False):
+            for i, item in enumerate(st.session_state.query_history[:5]):
+                col1, col2 = st.columns([4, 1])
+                with col1:
+                    st.caption(f"{i+1}. {item['query'][:60]}...")
+                with col2:
+                    st.caption(item['timestamp'])
+
+    # Enhanced Footer
+    st.markdown("---")
     st.markdown("""
-    <div style='text-align: center; color: #666; padding: 1rem;'>
-        <p><strong>Clinical RAG Assistant</strong> | Built with Streamlit, E5, and Mistral-7B</p>
-        <p><em>⚠️ For educational purposes only. Not for clinical decision-making.</em></p>
-        <p><small>Models loaded from Hugging Face Hub</small></p>
+    <div style="text-align: center; padding: 1rem; color: white;">
+        <p style="color: rgba(255,255,255,0.8);">
+            🏥 Clinical RAG Assistant Ultra • Memory-Optimized Edition
+        </p>
+        <p style="font-size: 0.8rem; color: rgba(255,255,255,0.6);">
+            ⚠️ Research purposes only • Hugging Face Hub Integration
+        </p>
     </div>
     """, unsafe_allow_html=True)
 
