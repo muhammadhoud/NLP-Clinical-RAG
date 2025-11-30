@@ -5,7 +5,7 @@ import time
 import gc
 
 class RAGPipelineMistral:
-    """Production RAG pipeline"""
+    """Production RAG pipeline for clinical document retrieval and generation"""
     
     def __init__(self, chroma_collection, embedding_model, generation_model, 
                  tokenizer, documents_df=None, max_context_tokens=2000, max_input_length=4096):
