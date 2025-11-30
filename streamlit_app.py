@@ -144,17 +144,32 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize session state
-if 'rag_pipeline' not in st.session_state:
-    st.session_state.rag_pipeline = None
-if 'query_history' not in st.session_state:
-    st.session_state.query_history = []
-if 'model_loaded' not in st.session_state:
-    st.session_state.model_loaded = False
-if 'loading_progress' not in st.session_state:
-    st.session_state.loading_progress = 0
-if 'loading_status' not in st.session_state:
-    st.session_state.loading_status = "Ready to load models"
+# ============================================================================
+# INITIALIZE SESSION STATE - FIXED VERSION
+# ============================================================================
+def initialize_session_state():
+    """Initialize all session state variables safely"""
+    if 'rag_pipeline' not in st.session_state:
+        st.session_state.rag_pipeline = None
+    if 'query_history' not in st.session_state:
+        st.session_state.query_history = []
+    if 'model_loaded' not in st.session_state:
+        st.session_state.model_loaded = False
+    if 'loading_progress' not in st.session_state:
+        st.session_state.loading_progress = 0
+    if 'loading_status' not in st.session_state:
+        st.session_state.loading_status = "Ready to load models"
+    if 'total_queries' not in st.session_state:
+        st.session_state.total_queries = 0
+    if 'avg_response_time' not in st.session_state:
+        st.session_state.avg_response_time = 0
+    if 'initialized' not in st.session_state:
+        st.session_state.initialized = False
+    if 'pipeline_config' not in st.session_state:
+        st.session_state.pipeline_config = None
+
+# Initialize session state at module level
+initialize_session_state()
 
 # ============================================================================
 # MEMORY MANAGEMENT UTILITIES
@@ -293,6 +308,7 @@ def load_models_with_progress():
         if pipeline:
             st.session_state.rag_pipeline = pipeline
             st.session_state.model_loaded = True
+            st.session_state.initialized = True
     
     # Start loading in a separate thread
     thread = threading.Thread(target=load_thread)
@@ -301,6 +317,9 @@ def load_models_with_progress():
 
 def format_metadata(metadata):
     """Format metadata for display."""
+    if not metadata:
+        return "No metadata available"
+    
     display_fields = {
         'disease_category': 'Disease Category',
         'disease_subtype': 'Disease Subtype',
@@ -317,7 +336,7 @@ def format_metadata(metadata):
             else:
                 formatted.append(f"**{label}**: {value}")
     
-    return " | ".join(formatted)
+    return " | ".join(formatted) if formatted else "No metadata available"
 
 def check_disk_space():
     """Check if we have enough disk space for model download."""
@@ -329,7 +348,14 @@ def check_disk_space():
     except:
         return True  # If we can't check, assume it's fine
 
+def safe_metric_get(key, default=0):
+    """Safely get metric value from session state"""
+    return getattr(st.session_state, key, default)
+
 def main():
+    # Ensure session state is initialized
+    initialize_session_state()
+    
     # Enhanced Hero Header
     st.markdown("""
     <div class="hero-header">
@@ -432,9 +458,14 @@ def main():
         
         st.markdown("---")
         st.markdown("### 📊 Statistics")
-        st.metric("Total Queries", st.session_state.total_queries)
-        if st.session_state.avg_response_time > 0:
-            st.metric("Avg Time", f"{st.session_state.avg_response_time:.1f}s")
+        
+        # SAFE metric access using helper function
+        total_queries = safe_metric_get('total_queries', 0)
+        avg_response_time = safe_metric_get('avg_response_time', 0)
+        
+        st.metric("Total Queries", total_queries)
+        if avg_response_time > 0:
+            st.metric("Avg Time", f"{avg_response_time:.1f}s")
         
         # Manual cleanup button
         if st.button("🧹 Clear Memory", use_container_width=True):
@@ -446,11 +477,12 @@ def main():
         # Query history
         st.divider()
         st.subheader("📜 Query History")
-        if st.session_state.query_history:
-            for i, hist in enumerate(reversed(st.session_state.query_history[-5:])):
-                with st.expander(f"Query {len(st.session_state.query_history) - i}"):
-                    st.text(hist['query'][:100] + "...")
-                    st.caption(f"⏱️ {hist['time']:.2f}s | 🎯 {hist['docs']} docs")
+        query_history = safe_metric_get('query_history', [])
+        if query_history:
+            for i, hist in enumerate(reversed(query_history[-5:])):
+                with st.expander(f"Query {len(query_history) - i}"):
+                    st.text(hist.get('query', '')[:100] + "...")
+                    st.caption(f"⏱️ {hist.get('time', 0):.2f}s | 🎯 {hist.get('docs', 0)} docs")
         else:
             st.info("No queries yet")
     
@@ -565,11 +597,15 @@ def main():
         # Clear memory before processing
         cleanup_memory()
         
-        st.session_state.query_history.insert(0, {
+        # Safely update session state
+        current_history = safe_metric_get('query_history', [])
+        current_history.insert(0, {
             'query': query,
             'timestamp': datetime.now().strftime('%H:%M:%S')
         })
-        st.session_state.total_queries += 1
+        st.session_state.query_history = current_history
+        
+        st.session_state.total_queries = safe_metric_get('total_queries', 0) + 1
         
         filters = {"disease_category": disease_category} if use_filter and disease_category else None
         
@@ -599,10 +635,12 @@ def main():
             cleanup_memory()
             
             total_time = time.time() - start_time
-            st.session_state.avg_response_time = (
-                (st.session_state.avg_response_time * (st.session_state.total_queries - 1) + total_time) 
-                / st.session_state.total_queries
-            )
+            
+            # Safely update average response time
+            current_avg = safe_metric_get('avg_response_time', 0)
+            current_total = safe_metric_get('total_queries', 1)
+            new_avg = ((current_avg * (current_total - 1) + total_time) / current_total)
+            st.session_state.avg_response_time = new_avg
             
             progress_bar.progress(100)
             time.sleep(0.3)
@@ -715,15 +753,16 @@ def main():
         st.warning("⚠️ Please enter a question", icon="⚠️")
 
     # Enhanced Query History
-    if st.session_state.query_history:
+    query_history = safe_metric_get('query_history', [])
+    if query_history:
         st.markdown("---")
         with st.expander("📜 Query History", expanded=False):
-            for i, item in enumerate(st.session_state.query_history[:5]):
+            for i, item in enumerate(query_history[:5]):
                 col1, col2 = st.columns([4, 1])
                 with col1:
-                    st.caption(f"{i+1}. {item['query'][:60]}...")
+                    st.caption(f"{i+1}. {item.get('query', '')[:60]}...")
                 with col2:
-                    st.caption(item['timestamp'])
+                    st.caption(item.get('timestamp', ''))
 
     # Enhanced Footer
     st.markdown("---")
