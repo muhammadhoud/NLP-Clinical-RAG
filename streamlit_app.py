@@ -37,6 +37,31 @@ def get_gpu_memory():
     return None
 
 # ============================================================================
+# CHROMADB PATH RESOLUTION
+# ============================================================================
+def find_chromadb_path():
+    """Find the correct ChromaDB path, handling subdirectories"""
+    base_path = "data/chroma_db"
+    
+    if not os.path.exists(base_path):
+        return None, "ChromaDB directory not found"
+    
+    # Check if files are directly in chroma_db
+    direct_files = [f for f in os.listdir(base_path) if f.endswith('.bin')]
+    if direct_files:
+        return base_path, f"Found {len(direct_files)} ChromaDB files"
+    
+    # Check for subdirectories
+    subdirs = [d for d in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, d))]
+    for subdir in subdirs:
+        subdir_path = os.path.join(base_path, subdir)
+        subdir_files = [f for f in os.listdir(subdir_path) if f.endswith('.bin')]
+        if subdir_files:
+            return subdir_path, f"Found {len(subdir_files)} ChromaDB files in subdirectory {subdir}"
+    
+    return None, "No ChromaDB files found"
+
+# ============================================================================
 # PAGE CONFIGURATION
 # ============================================================================
 st.set_page_config(
@@ -132,23 +157,23 @@ def load_rag_pipeline():
     # Clear memory before loading
     cleanup_memory()
     
+    # Find ChromaDB path
+    chroma_path, chroma_message = find_chromadb_path()
+    if chroma_path is None:
+        st.error(f"❌ {chroma_message}")
+        return None, None
+    
     # Configuration
     config = {
-        'chroma_db_path': "data/chroma_db",
+        'chroma_db_path': chroma_path,
         'collection_name': "clinical_notes",
         'model_name': "intfloat/e5-small-v2",
         'generation_model_name': "mistralai/Mistral-7B-Instruct-v0.2"
     }
     
-    # Check if ChromaDB exists
-    chroma_path = config['chroma_db_path']
-    if not os.path.exists(chroma_path):
-        st.error(f"❌ ChromaDB not found at {chroma_path}")
-        st.info("💡 Please make sure you've downloaded and placed the ChromaDB data in the data/ directory")
-        return None, None
-    
     device = "cuda" if torch.cuda.is_available() else "cpu"
     st.info(f"🖥️ Using device: {device}")
+    st.info(f"📁 {chroma_message}")
 
     try:
         # Load embedding model
@@ -161,7 +186,21 @@ def load_rag_pipeline():
             path=config['chroma_db_path'],
             settings=Settings(anonymized_telemetry=False)
         )
-        collection = chroma_client.get_collection(name=config['collection_name'])
+        
+        # List available collections
+        collections = chroma_client.list_collections()
+        st.info(f"📊 Found {len(collections)} collections")
+        
+        # Try to get the clinical_notes collection
+        try:
+            collection = chroma_client.get_collection(name=config['collection_name'])
+            st.success(f"✅ Loaded collection: {config['collection_name']}")
+        except Exception as e:
+            st.error(f"❌ Could not load collection '{config['collection_name']}': {e}")
+            st.info("Available collections:")
+            for col in collections:
+                st.write(f"- {col.name} ({col.count()} documents)")
+            return None, None
         
         # Load tokenizer
         st.info("🔤 Loading tokenizer...")
