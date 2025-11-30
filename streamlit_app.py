@@ -1,371 +1,585 @@
-"""
-Clinical RAG System - Streamlit Interface
-===========================================
-Streamlit app for clinical question answering using E5 + Mistral-7B RAG pipeline.
-Deployed on Streamlit Cloud with ChromaDB and pre-computed embeddings.
-"""
-
 import streamlit as st
 import sys
-from pathlib import Path
 import time
-import json
 import gc
+import torch
+import plotly.graph_objects as go
 from datetime import datetime
+import json
+import pandas as pd
+import numpy as np
 
-# Configure page
+# Add path
+sys.path.append('/content')
+
+# ============================================================================
+# MEMORY MANAGEMENT UTILITIES
+# ============================================================================
+def cleanup_memory():
+    """Aggressive memory cleanup"""
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+
+def get_gpu_memory():
+    """Get current GPU memory stats"""
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated(0) / 1e9
+        reserved = torch.cuda.memory_reserved(0) / 1e9
+        total = torch.cuda.get_device_properties(0).total_memory / 1e9
+        return {
+            'allocated': allocated,
+            'reserved': reserved,
+            'free': total - reserved,
+            'total': total
+        }
+    return None
+
+# ============================================================================
+# PAGE CONFIGURATION
+# ============================================================================
 st.set_page_config(
-    page_title="Clinical RAG Assistant",
+    page_title="Clinical RAG Assistant Ultra",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Add custom CSS
+# ============================================================================
+# CUSTOM CSS
+# ============================================================================
 st.markdown("""
 <style>
-    .main-header {
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+    
+    * { font-family: 'Inter', sans-serif; }
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    
+    .main {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background-attachment: fixed;
+    }
+    
+    .hero-header {
+        background: rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(10px);
+        border-radius: 20px;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        padding: 3rem;
+        margin-bottom: 2rem;
+        text-align: center;
+        box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+    }
+    
+    .hero-header h1 {
+        color: white;
+        font-size: 3rem;
+        font-weight: 700;
+        margin-bottom: 1rem;
+    }
+    
+    .glass-card {
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(10px);
+        border-radius: 15px;
+        padding: 2rem;
+        margin: 1rem 0;
+        box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.15);
+        transition: all 0.3s ease;
+    }
+    
+    .metric-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 1.5rem;
+        border-radius: 15px;
+        text-align: center;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        transition: all 0.3s ease;
+    }
+    
+    .metric-card:hover {
+        transform: translateY(-5px) rotate(2deg);
+    }
+    
+    .metric-value {
         font-size: 2.5rem;
         font-weight: 700;
-        color: #1f77b4;
-        text-align: center;
-        margin-bottom: 2rem;
+        color: white;
     }
-    .metric-card {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
+    
+    .metric-label {
+        color: rgba(255,255,255,0.9);
+        font-size: 0.9rem;
+        margin-top: 0.5rem;
+        text-transform: uppercase;
     }
+    
     .source-card {
-        background-color: #ffffff;
-        border: 1px solid #e0e0e0;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
+        background: white;
+        padding: 1.5rem;
+        border-radius: 15px;
+        margin: 1rem 0;
+        border-left: 5px solid #667eea;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        transition: all 0.3s ease;
     }
-    .stAlert {
-        margin-top: 1rem;
+    
+    .stButton button {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        border-radius: 25px;
+        padding: 0.75rem 2rem;
+        font-size: 1.1rem;
+        font-weight: 600;
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        transition: all 0.3s ease;
+    }
+    
+    .stButton button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+    }
+    
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
+    }
+    
+    [data-testid="stSidebar"] * {
+        color: white !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize session state
-if 'rag_pipeline' not in st.session_state:
-    st.session_state.rag_pipeline = None
-if 'query_history' not in st.session_state:
-    st.session_state.query_history = []
-if 'model_loaded' not in st.session_state:
-    st.session_state.model_loaded = False
-
-@st.cache_resource(show_spinner=False)
+# ============================================================================
+# LAZY LOADING FUNCTION
+# ============================================================================
+@st.cache_resource
 def load_rag_pipeline():
-    """Load RAG pipeline components (cached)."""
+    """Load RAG pipeline components with memory optimization"""
     import torch
-    from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
     from sentence_transformers import SentenceTransformer
+    from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
     import chromadb
     from chromadb.config import Settings
+    import json
+    from pathlib import Path
     
-    try:
-        # Import RAG pipeline class
-        sys.path.append(str(Path(__file__).parent / "src"))
-        from rag_pipeline import RAGPipelineMistral
-        
-        # Device configuration
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        
-        # Load E5 embedding model
-        embedding_model = SentenceTransformer(
-            'intfloat/e5-small-v2',
-            device=device,
-            cache_folder='./models'
-        )
-        
-        # Load ChromaDB
-        chroma_client = chromadb.PersistentClient(
-            path="./data/chroma_db",
-            settings=Settings(anonymized_telemetry=False)
-        )
-        collection = chroma_client.get_collection(name="clinical_notes")
-        
-        # Configure 4-bit quantization for Mistral
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16
-        )
-        
-        # Load Mistral tokenizer
-        tokenizer = AutoTokenizer.from_pretrained(
-            "mistralai/Mistral-7B-Instruct-v0.2",
-            cache_dir='./models'
-        )
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-        
-        # Load Mistral model (4-bit quantized)
-        model = AutoModelForCausalLM.from_pretrained(
-            "mistralai/Mistral-7B-Instruct-v0.2",
-            quantization_config=bnb_config,
-            device_map="auto",
-            cache_dir='./models',
-            low_cpu_mem_usage=True
-        )
-        
-        # Initialize RAG pipeline
-        rag_pipeline = RAGPipelineMistral(
-            chroma_collection=collection,
-            embedding_model=embedding_model,
-            generation_model=model,
-            tokenizer=tokenizer,
-            max_context_tokens=2000,
-            max_input_length=4096
-        )
-        
-        return rag_pipeline, device
-        
-    except Exception as e:
-        st.error(f"Error loading models: {e}")
-        return None, None
-
-def format_metadata(metadata):
-    """Format metadata for display."""
-    display_fields = {
-        'disease_category': 'Disease Category',
-        'disease_subtype': 'Disease Subtype',
-        'chunk_index': 'Chunk',
-        'total_chunks': 'Total Chunks'
-    }
+    sys.path.append('/content')
+    from streamlit_rag_class import RAGPipelineMistral
     
-    formatted = []
-    for key, label in display_fields.items():
-        if key in metadata:
-            value = metadata[key]
-            if key == 'chunk_index':
-                formatted.append(f"**{label}**: {value + 1}/{metadata.get('total_chunks', '?')}")
-            else:
-                formatted.append(f"**{label}**: {value}")
+    # Clear memory before loading
+    cleanup_memory()
     
-    return " | ".join(formatted)
-
-def main():
-    # Header
-    st.markdown('<h1 class="main-header">🏥 Clinical RAG Assistant</h1>', unsafe_allow_html=True)
-    st.markdown("""
-    <p style='text-align: center; color: #666; margin-bottom: 2rem;'>
-    AI-powered clinical decision support system using MIMIC-IV-EXT dataset<br>
-    <em>E5 Embeddings + Mistral-7B (4-bit) | 934 Clinical Cases | 25 Disease Categories</em>
-    </p>
-    """, unsafe_allow_html=True)
+    ready_flag = Path("/content/streamlit_data/pipeline_ready.flag")
+    if not ready_flag.exists():
+        raise FileNotFoundError("Pipeline not initialized.")
     
-    # Sidebar
-    with st.sidebar:
-        st.header("⚙️ Configuration")
-        
-        # Load model button
-        if not st.session_state.model_loaded:
-            if st.button("🚀 Load Models", type="primary", use_container_width=True):
-                with st.spinner("Loading models... This may take 2-3 minutes..."):
-                    pipeline, device = load_rag_pipeline()
-                    if pipeline:
-                        st.session_state.rag_pipeline = pipeline
-                        st.session_state.model_loaded = True
-                        st.success(f"✅ Models loaded successfully on {device}!")
-                        st.rerun()
-        else:
-            st.success("✅ Models loaded and ready")
-        
-        st.divider()
-        
-        # Query parameters
-        st.subheader("Query Parameters")
-        top_k = st.slider("Documents to retrieve", 1, 10, 5)
-        temperature = st.slider("Generation temperature", 0.1, 1.0, 0.7, 0.1)
-        max_tokens = st.slider("Max new tokens", 128, 512, 256, 32)
-        
-        st.divider()
-        
-        # Disease filter
-        st.subheader("Filter by Disease")
-        use_filter = st.checkbox("Enable disease filter")
-        disease_category = None
-        if use_filter:
-            categories = [
-                "Pneumonia", "Heart Failure", "Diabetes", 
-                "Acute Coronary Syndrome", "Stroke", "COPD",
-                "Hypertension", "Gastro-oesophageal Reflux Disease",
-                "Multiple Sclerosis", "Pulmonary Embolism"
-            ]
-            disease_category = st.selectbox("Select disease category", categories)
-        
-        st.divider()
-        
-        # System info
-        st.subheader("📊 System Info")
-        if st.session_state.model_loaded:
-            st.metric("Status", "🟢 Online")
-            st.metric("Documents", "934")
-            st.metric("Categories", "25")
-        else:
-            st.metric("Status", "🔴 Offline")
-        
-        # Query history
-        st.divider()
-        st.subheader("📜 Query History")
-        if st.session_state.query_history:
-            for i, hist in enumerate(reversed(st.session_state.query_history[-5:])):
-                with st.expander(f"Query {len(st.session_state.query_history) - i}"):
-                    st.text(hist['query'][:100] + "...")
-                    st.caption(f"⏱️ {hist['time']:.2f}s | 🎯 {hist['docs']} docs")
-        else:
-            st.info("No queries yet")
+    config_path = Path("/content/streamlit_data/pipeline_config.json")
+    with open(config_path) as f:
+        config = json.load(f)
     
-    # Main content
-    if not st.session_state.model_loaded:
-        st.info("👈 Click **Load Models** in the sidebar to start")
-        
-        # Show example queries
-        st.subheader("Example Queries")
-        examples = [
-            "What are the common symptoms of pneumonia?",
-            "How is acute coronary syndrome diagnosed and managed?",
-            "What complications should be monitored in diabetic patients?",
-            "What are the warning signs of pulmonary embolism?",
-            "Describe the diagnostic approach for suspected sepsis."
-        ]
-        
-        cols = st.columns(2)
-        for i, example in enumerate(examples):
-            with cols[i % 2]:
-                st.info(f"💡 {example}")
-        
-        # Dataset statistics
-        st.subheader("📈 Dataset Statistics")
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Total Cases", "511")
-        col2.metric("Text Chunks", "934")
-        col3.metric("Disease Categories", "25")
-        col4.metric("Avg Chunk Length", "311 tokens")
-        
-        return
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     
-    # Query input
-    query = st.text_area(
-        "🔍 Enter your clinical question:",
-        height=100,
-        placeholder="e.g., What are the symptoms of pneumonia with complications?"
+    # Load embedding model (small footprint)
+    embedding_model = SentenceTransformer(config['model_name'], device=device)
+    
+    # Load ChromaDB
+    chroma_client = chromadb.PersistentClient(
+        path=config['chroma_db_path'],
+        settings=Settings(anonymized_telemetry=False)
+    )
+    collection = chroma_client.get_collection(name=config['collection_name'])
+    
+    # Load tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(
+        config['generation_model_name'],
+        cache_dir='/content/models'
     )
     
-    col1, col2, col3 = st.columns([2, 1, 1])
-    with col1:
-        submit = st.button("🔎 Search & Generate Answer", type="primary", use_container_width=True)
-    with col2:
-        show_sources = st.checkbox("Show sources", value=True)
-    with col3:
-        show_metadata = st.checkbox("Show metadata", value=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     
-    if submit and query:
-        if not st.session_state.model_loaded:
-            st.error("Please load models first!")
-            return
-        
-        try:
-            # Generate answer
-            with st.spinner("🔍 Retrieving relevant documents..."):
-                filters = {"disease_category": disease_category} if use_filter and disease_category else None
-                
-                start_time = time.time()
-                result = st.session_state.rag_pipeline.generate_answer(
-                    query=query,
-                    top_k=top_k,
-                    filters=filters,
-                    temperature=temperature,
-                    max_new_tokens=max_tokens,
-                    show_progress=False
-                )
-                total_time = time.time() - start_time
-            
-            # Store in history
-            st.session_state.query_history.append({
-                'query': query,
-                'time': total_time,
-                'docs': len(result.get('sources', []))
-            })
-            
-            # Display results
-            st.success("✅ Answer generated successfully!")
-            
-            # Metrics
-            col1, col2, col3, col4 = st.columns(4)
-            metadata = result.get('metadata', {})
-            col1.metric("⏱️ Total Time", f"{total_time:.2f}s")
-            col2.metric("📄 Documents", len(result.get('sources', [])))
-            col3.metric("🔤 Tokens Generated", metadata.get('output_tokens', 'N/A'))
-            col4.metric("🎯 Retrieval Time", f"{metadata.get('retrieval_time', 0)*1000:.0f}ms")
-            
-            # Answer
-            st.subheader("💬 Generated Answer")
-            st.markdown(f"""
-            <div style='background-color: #f8f9fa; padding: 1.5rem; border-radius: 0.5rem; border-left: 4px solid #1f77b4;'>
-                {result['answer']}
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # Sources
-            if show_sources and result.get('sources'):
-                st.subheader("📚 Retrieved Sources")
-                
-                for i, source in enumerate(result['sources'][:5], 1):
-                    with st.expander(f"📄 Source {i} - {source['metadata'].get('disease_category', 'Unknown')} (Similarity: {source['similarity']:.4f})"):
-                        if show_metadata:
-                            st.markdown(format_metadata(source['metadata']))
-                            st.divider()
-                        
-                        st.markdown(f"**Document Text:**")
-                        st.text_area(
-                            "Content",
-                            source['text'][:500] + "..." if len(source['text']) > 500 else source['text'],
-                            height=150,
-                            key=f"source_{i}",
-                            label_visibility="collapsed"
-                        )
-            
-            # Generation metadata
-            if show_metadata:
-                with st.expander("🔧 Generation Metadata"):
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.json({
-                            "retrieval_time_ms": round(metadata.get('retrieval_time', 0) * 1000, 2),
-                            "generation_time_ms": round(metadata.get('generation_time', 0) * 1000, 2),
-                            "input_tokens": metadata.get('input_tokens', 'N/A'),
-                            "output_tokens": metadata.get('output_tokens', 'N/A')
-                        })
-                    with col2:
-                        st.json({
-                            "temperature": temperature,
-                            "top_k": top_k,
-                            "max_new_tokens": max_tokens,
-                            "disease_filter": disease_category if use_filter else "None"
-                        })
-        
-        except Exception as e:
-            st.error(f"❌ Error generating answer: {str(e)}")
-            st.exception(e)
+    # Configure 4-bit quantization with memory optimization
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16
+    )
     
-    elif submit:
-        st.warning("Please enter a query first!")
+    # Load model with memory optimization
+    model = AutoModelForCausalLM.from_pretrained(
+        config['generation_model_name'],
+        quantization_config=bnb_config,
+        device_map="auto",
+        cache_dir='/content/models',
+        low_cpu_mem_usage=True,
+        torch_dtype=torch.bfloat16
+    )
     
-    # Footer
-    st.divider()
-    st.markdown("""
-    <div style='text-align: center; color: #666; padding: 1rem;'>
-        <p><strong>Clinical RAG Assistant</strong> | Built with Streamlit, E5, and Mistral-7B</p>
-        <p><em>⚠️ For educational purposes only. Not for clinical decision-making.</em></p>
-    </div>
-    """, unsafe_allow_html=True)
+    # Enable gradient checkpointing for memory efficiency
+    if hasattr(model, 'gradient_checkpointing_enable'):
+        model.gradient_checkpointing_enable()
+    
+    # Create pipeline with reduced defaults
+    pipeline = RAGPipelineMistral(
+        chroma_collection=collection,
+        embedding_model=embedding_model,
+        generation_model=model,
+        tokenizer=tokenizer,
+        max_context_tokens=1500,  # REDUCED from 2000
+        max_input_length=3072      # REDUCED from 4096
+    )
+    
+    # Override generation config for memory efficiency
+    pipeline.generation_config.update({
+        'max_new_tokens': 256,      # REDUCED from 512
+        'temperature': 0.7,
+        'top_p': 0.9,
+        'top_k': 50,
+        'repetition_penalty': 1.1,
+        'do_sample': True,
+    })
+    
+    return pipeline, config
 
-if __name__ == "__main__":
-    main()
+# ============================================================================
+# SESSION STATE
+# ============================================================================
+if 'rag_pipeline' not in st.session_state:
+    st.session_state.rag_pipeline = None
+    st.session_state.initialized = False
+    st.session_state.query_history = []
+    st.session_state.total_queries = 0
+    st.session_state.avg_response_time = 0
+
+# ============================================================================
+# INITIALIZE PIPELINE
+# ============================================================================
+if not st.session_state.initialized:
+    with st.spinner("🚀 Initializing AI Systems..."):
+        try:
+            # Clear memory first
+            cleanup_memory()
+            
+            pipeline, config = load_rag_pipeline()
+            st.session_state.rag_pipeline = pipeline
+            st.session_state.pipeline_config = config
+            st.session_state.initialized = True
+            
+            # Show initial memory
+            mem = get_gpu_memory()
+            if mem:
+                st.toast(f"GPU Memory: {mem['allocated']:.1f}GB / {mem['total']:.1f}GB", icon="🎮")
+            
+            st.rerun()
+        except FileNotFoundError:
+            st.error("❌ Pipeline not found. Run notebook cells first.")
+            st.stop()
+        except Exception as e:
+            st.error(f"❌ Initialization failed: {e}")
+            st.exception(e)
+            st.stop()
+
+# ============================================================================
+# HERO HEADER
+# ============================================================================
+st.markdown("""
+<div class="hero-header">
+    <h1>✨ Clinical RAG Assistant Ultra</h1>
+    <p style="color: white; font-size: 1.2rem;">
+        Memory-optimized for T4 GPU • Advanced RAG System
+    </p>
+    <div style="margin-top: 1rem;">
+        <span style="background: rgba(255,255,255,0.2); padding: 0.5rem 1rem; border-radius: 20px; margin: 0.5rem; color: white;">⚡ Fast</span>
+        <span style="background: rgba(255,255,255,0.2); padding: 0.5rem 1rem; border-radius: 20px; margin: 0.5rem; color: white;">🧠 Smart</span>
+        <span style="background: rgba(255,255,255,0.2); padding: 0.5rem 1rem; border-radius: 20px; margin: 0.5rem; color: white;">💾 Optimized</span>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+# ============================================================================
+# SIDEBAR - OPTIMIZED SETTINGS
+# ============================================================================
+with st.sidebar:
+    st.markdown("### ⚙️ Settings")
+    
+    # Top K (reduced default)
+    top_k = st.slider("📊 Top K Results", 1, 5, 3,  # MAX 5, DEFAULT 3
+                     help="Fewer results = less memory")
+    
+    # Temperature
+    temperature = st.slider("🌡️ Temperature", 0.0, 1.0, 0.7, 0.1)
+    
+    # Max tokens (NEW - user control)
+    max_tokens = st.slider("📝 Max Output Tokens", 128, 512, 256, 64,
+                          help="Lower = less memory, faster generation")
+    
+    # Filter toggle
+    use_filter = st.checkbox("🔍 Enable Disease Filter", value=False)
+    
+    selected_category = None
+    if use_filter:
+        categories = [
+            "Pneumonia", "Diabetes", "Heart Failure", "Stroke", 
+            "COPD", "Hypertension", "Acute Coronary Syndrome"
+        ]
+        selected_category = st.selectbox("Select Category", options=categories)
+    
+    st.markdown("---")
+    
+    # GPU Memory Monitor
+    st.markdown("### 🎮 GPU Status")
+    mem = get_gpu_memory()
+    if mem:
+        usage_pct = (mem['allocated'] / mem['total']) * 100
+        st.metric("Memory Used", f"{mem['allocated']:.1f}GB", 
+                 delta=f"{usage_pct:.0f}%")
+        
+        # Memory warning
+        if usage_pct > 80:
+            st.warning("⚠️ High memory usage", icon="⚠️")
+        elif usage_pct > 60:
+            st.info("💡 Moderate usage", icon="💡")
+        else:
+            st.success("✅ Good memory", icon="✅")
+    
+    st.markdown("---")
+    st.markdown("### 📊 Statistics")
+    st.metric("Total Queries", st.session_state.total_queries)
+    if st.session_state.avg_response_time > 0:
+        st.metric("Avg Time", f"{st.session_state.avg_response_time:.1f}s")
+    
+    # Manual cleanup button
+    if st.button("🧹 Clear GPU Memory", use_container_width=True):
+        cleanup_memory()
+        st.toast("✅ Memory cleared!", icon="✅")
+        time.sleep(0.5)
+        st.rerun()
+
+# ============================================================================
+# MAIN QUERY INTERFACE
+# ============================================================================
+st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+st.markdown("## 💬 Ask Your Clinical Question")
+
+example_queries = [
+    "What are the main symptoms of pneumonia?",
+    "How is diabetes diagnosed?",
+    "What causes heart failure?",
+    "List stroke risk factors",
+]
+
+col1, col2 = st.columns([4, 1])
+
+with col1:
+    query = st.text_area(
+        "Enter your question:",
+        height=120,
+        placeholder="e.g., What are the symptoms of pneumonia?",
+        help="Keep queries focused for better results"
+    )
+
+with col2:
+    st.markdown("<br>", unsafe_allow_html=True)
+    search_clicked = st.button("🔍 Analyze", type="primary", use_container_width=True)
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("🎲 Random", use_container_width=True):
+        query = np.random.choice(example_queries)
+        st.rerun()
+
+st.markdown('</div>', unsafe_allow_html=True)
+
+# ============================================================================
+# PROCESS QUERY - MEMORY OPTIMIZED
+# ============================================================================
+if search_clicked and query.strip():
+    # Clear memory before processing
+    cleanup_memory()
+    
+    st.session_state.query_history.insert(0, {
+        'query': query,
+        'timestamp': datetime.now().strftime('%H:%M:%S')
+    })
+    st.session_state.total_queries += 1
+    
+    filters = {"disease_category": selected_category} if use_filter and selected_category else None
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    status_text.info("🔍 Analyzing query...")
+    progress_bar.progress(20)
+    
+    try:
+        start_time = time.time()
+        
+        status_text.info("🧠 Retrieving documents...")
+        progress_bar.progress(40)
+        
+        # Generate with memory-optimized parameters
+        result = st.session_state.rag_pipeline.generate_answer(
+            query=query,
+            top_k=top_k,              # User-controlled (reduced)
+            filters=filters,
+            temperature=temperature,
+            max_new_tokens=max_tokens, # User-controlled
+            show_progress=False
+        )
+        
+        progress_bar.progress(80)
+        
+        # Aggressive cleanup after generation
+        cleanup_memory()
+        
+        total_time = time.time() - start_time
+        
+        st.session_state.avg_response_time = (
+            (st.session_state.avg_response_time * (st.session_state.total_queries - 1) + total_time) 
+            / st.session_state.total_queries
+        )
+        
+        progress_bar.progress(100)
+        time.sleep(0.3)
+        progress_bar.empty()
+        status_text.empty()
+        
+        # ====================================================================
+        # RESULTS DISPLAY
+        # ====================================================================
+        
+        st.markdown("### 📊 Query Performance")
+        
+        metric_cols = st.columns(5)
+        
+        retrieval_time = result['metadata'].get('retrieval_time', 0) * 1000
+        generation_time = result['metadata'].get('generation_time', 0)
+        output_tokens = result['metadata'].get('output_tokens', 
+                                               result['metadata'].get('total_tokens', 0))
+        
+        metrics_data = [
+            ("⚡", len(result.get('sources', [])), "Sources"),
+            ("🎯", f"{retrieval_time:.0f}ms", "Retrieval"),
+            ("🤖", f"{generation_time:.1f}s", "Generation"),
+            ("📝", output_tokens, "Tokens"),
+            ("⏱️", f"{total_time:.2f}s", "Total")
+        ]
+        
+        for col, (icon, value, label) in zip(metric_cols, metrics_data):
+            with col:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">{icon}</div>
+                    <div class="metric-value">{value}</div>
+                    <div class="metric-label">{label}</div>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        # AI Answer
+        st.markdown("### 🤖 AI-Generated Answer")
+        
+        answer_text = result.get('answer', 'No answer generated')
+        st.info(answer_text)
+        
+        # Copy button
+        if st.button("📋 Copy Answer", use_container_width=False):
+            st.toast("✅ Copied!", icon="✅")
+        
+        st.markdown("---")
+        
+        # Sources (collapsed by default to save screen space)
+        sources = result.get('sources', [])
+        if sources:
+            st.markdown("### 📚 Retrieved Sources")
+            
+            similarities = [s.get('similarity', 0) for s in sources]
+            avg_similarity = np.mean(similarities) if similarities else 0
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("📊 Confidence", f"{avg_similarity:.1%}")
+            with col2:
+                st.metric("📄 Sources", len(sources))
+            with col3:
+                high_q = sum(1 for s in similarities if s > 0.7)
+                st.metric("⭐ High Quality", high_q)
+            
+            for i, source in enumerate(sources, 1):
+                similarity = source.get('similarity', 0)
+                category = source.get('metadata', {}).get('disease_category', 'Unknown')
+                
+                with st.expander(f"📄 #{i}: {category} ({similarity:.0%})", 
+                               expanded=(i == 1)):
+                    st.markdown(f"**Confidence:** {similarity:.1%}")
+                    
+                    # Confidence bar
+                    st.progress(similarity)
+                    
+                    text_content = source.get('text', '')[:500]  # Limit preview
+                    st.text_area("Preview", value=text_content, height=150, 
+                               key=f"src_{i}", label_visibility="collapsed")
+        
+        st.success(f"✅ Completed in {total_time:.1f}s", icon="✅")
+        
+        # Show final memory state
+        mem = get_gpu_memory()
+        if mem:
+            st.caption(f"🎮 GPU: {mem['allocated']:.1f}GB / {mem['total']:.1f}GB")
+        
+    except RuntimeError as e:
+        progress_bar.empty()
+        status_text.empty()
+        
+        if "out of memory" in str(e).lower():
+            st.error("❌ GPU Out of Memory!", icon="❌")
+            st.warning("""
+            **Quick Fixes:**
+            1. Click "🧹 Clear GPU Memory" in sidebar
+            2. Reduce "Max Output Tokens" to 128
+            3. Reduce "Top K Results" to 1-2
+            4. Restart the notebook runtime if issue persists
+            """)
+            
+            # Attempt recovery
+            cleanup_memory()
+        else:
+            st.error(f"❌ Error: {str(e)}", icon="❌")
+            
+    except Exception as e:
+        progress_bar.empty()
+        status_text.empty()
+        st.error(f"❌ Error: {str(e)}", icon="❌")
+        
+elif search_clicked:
+    st.warning("⚠️ Please enter a question", icon="⚠️")
+
+# ============================================================================
+# QUERY HISTORY
+# ============================================================================
+if st.session_state.query_history:
+    st.markdown("---")
+    with st.expander("📜 Query History", expanded=False):
+        for i, item in enumerate(st.session_state.query_history[:5]):
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.caption(f"{i+1}. {item['query'][:60]}...")
+            with col2:
+                st.caption(item['timestamp'])
+
+# Footer
+st.markdown("---")
+st.markdown("""
+<div style="text-align: center; padding: 1rem; color: white;">
+    <p style="color: rgba(255,255,255,0.8);">
+        🏥 Clinical RAG Assistant • Memory-Optimized Edition
+    </p>
+    <p style="font-size: 0.8rem; color: rgba(255,255,255,0.6);">
+        ⚠️ Research purposes only • Optimized for Colab T4 GPU
+    </p>
+</div>
+""", unsafe_allow_html=True)
