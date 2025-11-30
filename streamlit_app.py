@@ -141,16 +141,22 @@ def load_rag_pipeline():
     }
     
     # Check if ChromaDB exists
-    if not os.path.exists(config['chroma_db_path']):
-        raise FileNotFoundError(f"ChromaDB not found at {config['chroma_db_path']}. Please download the data.")
+    chroma_path = config['chroma_db_path']
+    if not os.path.exists(chroma_path):
+        st.error(f"❌ ChromaDB not found at {chroma_path}")
+        st.info("💡 Please make sure you've downloaded and placed the ChromaDB data in the data/ directory")
+        return None, None
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    
+    st.info(f"🖥️ Using device: {device}")
+
     try:
         # Load embedding model
+        st.info("📥 Loading embedding model...")
         embedding_model = SentenceTransformer(config['model_name'], device=device)
         
         # Load ChromaDB
+        st.info("📚 Loading ChromaDB...")
         chroma_client = chromadb.PersistentClient(
             path=config['chroma_db_path'],
             settings=Settings(anonymized_telemetry=False)
@@ -158,12 +164,14 @@ def load_rag_pipeline():
         collection = chroma_client.get_collection(name=config['collection_name'])
         
         # Load tokenizer
+        st.info("🔤 Loading tokenizer...")
         tokenizer = AutoTokenizer.from_pretrained(config['generation_model_name'])
         
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
         
         # Configure 4-bit quantization
+        st.info("⚙️ Configuring model quantization...")
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_use_double_quant=True,
@@ -172,6 +180,7 @@ def load_rag_pipeline():
         )
         
         # Load model
+        st.info("🧠 Loading language model...")
         model = AutoModelForCausalLM.from_pretrained(
             config['generation_model_name'],
             quantization_config=bnb_config,
@@ -181,6 +190,7 @@ def load_rag_pipeline():
         )
         
         # Create pipeline
+        st.info("🔧 Creating RAG pipeline...")
         pipeline = RAGPipelineMistral(
             chroma_collection=collection,
             embedding_model=embedding_model,
@@ -203,8 +213,8 @@ def load_rag_pipeline():
         return pipeline, config
         
     except Exception as e:
-        st.error(f"Error loading pipeline: {e}")
-        raise
+        st.error(f"❌ Error loading pipeline: {str(e)}")
+        return None, None
 
 # ============================================================================
 # SESSION STATE
@@ -226,6 +236,10 @@ if not st.session_state.initialized:
             cleanup_memory()
             
             pipeline, config = load_rag_pipeline()
+            if pipeline is None:
+                st.error("❌ Failed to initialize pipeline. Please check the data directory.")
+                st.stop()
+                
             st.session_state.rag_pipeline = pipeline
             st.session_state.pipeline_config = config
             st.session_state.initialized = True
