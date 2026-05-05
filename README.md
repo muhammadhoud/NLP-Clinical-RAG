@@ -1,10 +1,10 @@
 # Clinical RAG Assistant
 
 <p align="center">
-  <img src="[https://img.shields.io/badge/Python-3.10+-blue.svg](https://img.shields.io/badge/Python-3.10+-blue.svg)" alt="Python">
-  <img src="[https://img.shields.io/badge/Streamlit-1.28+-red.svg](https://img.shields.io/badge/Streamlit-1.28+-red.svg)" alt="Streamlit">
-  <img src="[https://img.shields.io/badge/License-MIT-green.svg](https://img.shields.io/badge/License-MIT-green.svg)" alt="License">
-  <img src="[https://img.shields.io/badge/MIMIC--IV--EXT-Dataset-orange.svg](https://img.shields.io/badge/MIMIC--IV--EXT-Dataset-orange.svg)" alt="Dataset">
+  <img src="https://img.shields.io/badge/Python-3.10+-blue.svg" alt="Python">
+  <img src="https://img.shields.io/badge/Streamlit-1.28+-red.svg" alt="Streamlit">
+  <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License">
+  <img src="https://img.shields.io/badge/MIMIC--IV--EXT-Dataset-orange.svg" alt="Dataset">
 </p>
 
 <p align="center">
