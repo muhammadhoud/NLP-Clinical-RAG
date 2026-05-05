@@ -219,6 +219,7 @@ docker run -p 8501:8501 --gpus all clinical-rag
 
 **Muhammad Houd**
 *   **Email:** mhoud131@gmail.com
+*   **Phone Number:** +923116214664
 *   **LinkedIn:** [Muhammad Houd](https://www.linkedin.com/in/muhammadhoud/)
 *   **GitHub:** [@muhammadhoud](https://github.com/muhammadhoud)
 
